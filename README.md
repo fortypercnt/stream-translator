@@ -12,8 +12,8 @@ This script is inspired by [audioWhisper](https://github.com/Awexander/audioWhis
 ## Setup
 
 1. Setup a virtual environment.
-2. ```git clone https://github.com/fortypercnt/stream-translator.git```.
-3. ```pip install -r requirements.txt```.
+2. ```git clone https://github.com/fortypercnt/stream-translator.git```
+3. ```pip install -r requirements.txt```
 4. Make sure that pytorch is installed with CUDA support. Whisper will probably not run in real time on a CPU.
 
 ## Command-line usage
@@ -23,10 +23,12 @@ This script is inspired by [audioWhisper](https://github.com/Awexander/audioWhis
 By default, the URL can be of the form ```twitch.tv/forsen``` and streamlink is used to obtain the .m3u8 link which is passed to ffmpeg.
 See [streamlink plugins](https://streamlink.github.io/plugins.html) for info on all supported sites.
 
-|      --flags          |  Default Value  |      Description                                                                                                                     |
-|:---------------------:|:---------------:|:------------------------------------------------------------------------------------------------------------------------------------:|
-|`--model`              | small           | Select model size. See [here](https://github.com/openai/whisper#available-models-and-languages) for available models.                                     |
-|`--task`               | translate      | Whether to transcribe the audio (keep original language) or translate to english.                                                    |
-|`--language`           | auto            | Language spoken in the stream. See [here](https://github.com/openai/whisper#available-models-and-languages) for available languages. |
-|`--interval`           | 8               | Interval between calls to the language model in seconds.                                                                             |
-|`--directURL`          |                 | Set this flag to pass the URL directly to ffmpeg. Otherwise, streamlink is used to obtain the stream URL.                            |
+|    --flags    |  Default Value  |                                                             Description                                                              |
+|:-------------:|:---------------:|:------------------------------------------------------------------------------------------------------------------------------------:|
+|   `--model`   |      small      |        Select model size. See [here](https://github.com/openai/whisper#available-models-and-languages) for available models.         |
+|   `--task`    |    translate    |                          Whether to transcribe the audio (keep original language) or translate to english.                           |
+| `--language`  |      auto       | Language spoken in the stream. See [here](https://github.com/openai/whisper#available-models-and-languages) for available languages. |
+| `--interval`  |        5        |                                       Interval between calls to the language model in seconds.                                       |
+| `--beam_size` |        5        |                 Number of beams in beam search. Set to 0 to use greedy algorithm instead (faster but less accurate).                 |
+|  `--best_of`  |        5        |                                    Number of candidates when sampling with non-zero temperature.                                     |
+| `--directURL` |                 |              Set this flag to pass the URL directly to ffmpeg. Otherwise, streamlink is used to obtain the stream URL.               |
