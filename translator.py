@@ -9,8 +9,48 @@ import whisper
 SAMPLE_RATE = 16000
 
 
-def open_stream(stream, directURL):
-    if not directURL:
+class RingBuffer:
+    def __init__(self, size):
+        self.size = size
+        self.data = []
+        self.full = False
+        self.cur = 0
+
+    def append(self, x):
+        if self.size <= 0:
+            return
+        if self.full:
+            self.data[self.cur] = x
+            self.cur = (self.cur + 1) % self.size
+        else:
+            self.data.append(x)
+            if len(self.data) == self.size:
+                self.full = True
+
+    def get_all(self):
+        """ Get all elements in chronological order from oldest to newest. """
+        all_data = []
+        for i in range(len(self.data)):
+            idx = (i + self.cur) % self.size
+            all_data.append(self.data[idx])
+        return all_data
+
+    def has_repetition(self):
+        prev = None
+        for elem in self.data:
+            if elem == prev:
+                return True
+            prev = elem
+        return False
+
+    def clear(self):
+        self.data = []
+        self.full = False
+        self.cur = 0
+
+
+def open_stream(stream, direct_url):
+    if not direct_url:
         import streamlink
         stream_options = streamlink.streams(stream)
         if not stream_options:
@@ -36,35 +76,10 @@ def open_stream(stream, directURL):
     return process
 
 
-def main(args):
-    url = args.URL
-    model = args.model
-    task = args.task
-    language = args.language
-    interval = args.interval
-    beam_size = args.beam_size
-    best_of = args.best_of
-    direct_url = args.directURL
-
-    n_samples = interval * SAMPLE_RATE * 2  # Factor 2 comes from reading the int16 stream as bytes
-    if beam_size <= 0 or best_of <= 0:
-        beam_size = None
-        best_of = None
-
-    if model.endswith('.en'):
-        if model == 'large.en':
-            print("English model does not have large model, please choose from {tiny.en, small.en, medium.en}")
-            sys.exit(0)
-        if language != 'English' and language != 'en':
-            if language == 'auto':
-                print("Using .en model, setting language from auto to English")
-                language = 'en'
-            else:
-                print("English model cannot be used to detect non english language, please choose a non .en model")
-                sys.exit(0)
-    lang_str = ""
-    if language == 'auto':
-        language = None
+def main(url, model="small", language=None, interval=5, history_buffer_size=30, direct_url=False, **decode_options):
+    n_bytes = interval * SAMPLE_RATE * 2  # Factor 2 comes from reading the int16 stream as bytes
+    audio_buffer = RingBuffer((history_buffer_size // interval) + 1)
+    prefix = RingBuffer(history_buffer_size // interval)
 
     print("Loading model...")
     model = whisper.load_model(model)
@@ -74,18 +89,38 @@ def main(args):
 
     while process.poll() is None:
         try:
-            # Load audio from ffmpeg stream
-            in_bytes = process.stdout.read(n_samples)
+            # Read audio from ffmpeg stream
+            in_bytes = process.stdout.read(n_bytes)
             if not in_bytes:
                 break
-            audio = np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0
+            audio_buffer.append(np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0)
 
             # Decode the audio
-            result = model.transcribe(audio, task=task, language=language, beam_size=beam_size, best_of=best_of,
-                                      compression_ratio_threshold=2.0, suppress_blank=False, without_timestamps=True)
-            if language is None:
-                lang_str = "(" + result.get("language") + ")"
-            print(f'{datetime.now().strftime("%H:%M:%S")} {lang_str} {result.get("text")}')
+            result = model.transcribe(np.concatenate(audio_buffer.get_all()),
+                                      prefix="".join(prefix.get_all()),
+                                      language=language,
+                                      compression_ratio_threshold=2.0,
+                                      without_timestamps=True,
+                                      **decode_options)
+
+            clear_buffers = False
+            new_prefix = ""
+            for segment in result["segments"]:
+                if segment["temperature"] < 0.5 and segment["no_speech_prob"] < 0.6:
+                    new_prefix += segment["text"]
+                else:
+                    # Clear history if the translation is unreliable, otherwise prompting on this leads to repetition
+                    # and getting stuck.
+                    clear_buffers = True
+
+            prefix.append(new_prefix)
+
+            if clear_buffers or prefix.has_repetition():
+                audio_buffer.clear()
+                prefix.clear()
+                
+            print(f'{datetime.now().strftime("%H:%M:%S")} '
+                  f'{"" if language else "(" + result.get("language") + ")"} {result.get("text")}')
 
         except Exception as e:
             print("Error", e)
@@ -109,16 +144,41 @@ def cli():
                         help='Language spoken in the stream. Default option is to auto detect the spoken language. '
                              'See https://github.com/openai/whisper for available languages.')
     parser.add_argument('--interval', type=int, default=5,
-                        help='Interval between calls to the language model in seconds. Should not be higher than 30.')
+                        help='Interval between calls to the language model in seconds.')
+    parser.add_argument('--history_buffer_size', type=int, default=0,
+                        help='Seconds of previous audio/text to use for conditioning the model. Set to 0 to just use '
+                             'audio from the last interval. Note that this can easily lead to repetition/loops if the'
+                             'chosen language/model settings do not produce good results to begin with.')
     parser.add_argument('--beam_size', type=int, default=5,
                         help='Number of beams in beam search. Set to 0 to use greedy algorithm instead.')
     parser.add_argument('--best_of', type=int, default=5,
                         help='Number of candidates when sampling with non-zero temperature.')
-    parser.add_argument('--directURL', action='store_true',
+    parser.add_argument('--direct_url', action='store_true',
                         help='Set this flag to pass the URL directly to ffmpeg. Otherwise, streamlink is used to '
                              'obtain the stream URL.')
-    args = parser.parse_args()
-    main(args)
+
+    args = parser.parse_args().__dict__
+    url = args.pop("URL")
+
+    if args['model'].endswith('.en'):
+        if args['model'] == 'large.en':
+            print("English model does not have large model, please choose from {tiny.en, small.en, medium.en}")
+            sys.exit(0)
+        if args['language'] != 'English' and args['language'] != 'en':
+            if args['language'] == 'auto':
+                print("Using .en model, setting language from auto to English")
+                args['language'] = 'en'
+            else:
+                print("English model cannot be used to detect non english language, please choose a non .en model")
+                sys.exit(0)
+
+    if args['language'] == 'auto':
+        args['language'] = None
+
+    if args['beam_size'] == 0:
+        args['beam_size'] = None
+
+    main(url, **args)
 
 
 if __name__ == '__main__':
