@@ -49,7 +49,7 @@ class RingBuffer:
         self.cur = 0
 
 
-def open_stream(stream, direct_url):
+def open_stream(stream, direct_url, preferred_quality):
     if not direct_url:
         import streamlink
         stream_options = streamlink.streams(stream)
@@ -57,12 +57,16 @@ def open_stream(stream, direct_url):
             print("No playable streams found on this URL:", stream)
             sys.exit(0)
 
-        if 'audio_only' in stream_options:
-            stream = stream_options['audio_only'].url
-        elif 'best' in stream_options:
-            stream = stream_options['best'].url
-        else:
-            stream = next(iter(stream_options.values())).url
+        option = None
+        for quality in [preferred_quality] + ['audio_only', 'best']:
+            if quality in stream_options:
+                option = quality
+                break
+        if option is None:
+            # Fallback
+            option = next(iter(stream_options.values()))
+
+        stream = stream_options[option].to_url()
 
     try:
         process = (
@@ -76,16 +80,18 @@ def open_stream(stream, direct_url):
     return process
 
 
-def main(url, model="small", language=None, interval=5, history_buffer_size=30, direct_url=False, **decode_options):
+def main(url, model="small", language=None, interval=5, history_buffer_size=0, preferred_quality="audio_only",
+         direct_url=False, **decode_options):
+
     n_bytes = interval * SAMPLE_RATE * 2  # Factor 2 comes from reading the int16 stream as bytes
     audio_buffer = RingBuffer((history_buffer_size // interval) + 1)
-    prefix = RingBuffer(history_buffer_size // interval)
+    previous_text = RingBuffer(history_buffer_size // interval)
 
     print("Loading model...")
     model = whisper.load_model(model)
 
     print("Opening stream...")
-    process = open_stream(url, direct_url)
+    process = open_stream(url, direct_url, preferred_quality)
 
     while process.poll() is None:
         try:
@@ -97,7 +103,7 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=30, 
 
             # Decode the audio
             result = model.transcribe(np.concatenate(audio_buffer.get_all()),
-                                      prefix="".join(prefix.get_all()),
+                                      prefix="".join(previous_text.get_all()),
                                       language=language,
                                       compression_ratio_threshold=2.0,
                                       without_timestamps=True,
@@ -113,11 +119,11 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=30, 
                     # and getting stuck.
                     clear_buffers = True
 
-            prefix.append(new_prefix)
+            previous_text.append(new_prefix)
 
-            if clear_buffers or prefix.has_repetition():
+            if clear_buffers or previous_text.has_repetition():
                 audio_buffer.clear()
-                prefix.clear()
+                previous_text.clear()
                 
             print(f'{datetime.now().strftime("%H:%M:%S")} '
                   f'{"" if language else "(" + result.get("language") + ")"} {result.get("text")}')
@@ -153,6 +159,9 @@ def cli():
                         help='Number of beams in beam search. Set to 0 to use greedy algorithm instead.')
     parser.add_argument('--best_of', type=int, default=5,
                         help='Number of candidates when sampling with non-zero temperature.')
+    parser.add_argument('--preferred_quality', type=str, default='audio_only',
+                        help='Preferred stream quality option. "best" and "worst" should always be available. Type '
+                             '"streamlink URL" in the console to see quality options for your URL.')
     parser.add_argument('--direct_url', action='store_true',
                         help='Set this flag to pass the URL directly to ffmpeg. Otherwise, streamlink is used to '
                              'obtain the stream URL.')
