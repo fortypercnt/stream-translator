@@ -114,11 +114,11 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
     print("Loading model...")
     model = whisper.load_model(model)
 
-    print("Opening stream...")
-    process1, process2 = open_stream(url, direct_url, preferred_quality)
+    try:
+        print("Opening stream...")
+        process1, process2 = open_stream(url, direct_url, preferred_quality)
 
-    while process1.poll() is None:
-        try:
+        while process1.poll() is None:
             # Read audio from ffmpeg stream
             in_bytes = process1.stdout.read(n_bytes)
             if not in_bytes:
@@ -152,13 +152,11 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
             print(f'{datetime.now().strftime("%H:%M:%S")} '
                   f'{"" if language else "(" + result.get("language") + ")"} {result.get("text")}')
 
-        except Exception as e:
-            print("Error", e)
-
-    print("Stream ended")
-    process1.wait()
-    if process2:
-        process2.kill()
+        print("Stream ended")
+    finally:
+        process1.kill()
+        if process2:
+            process2.kill()
 
 
 def cli():
