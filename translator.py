@@ -50,34 +50,58 @@ class RingBuffer:
 
 
 def open_stream(stream, direct_url, preferred_quality):
-    if not direct_url:
-        import streamlink
-        stream_options = streamlink.streams(stream)
-        if not stream_options:
-            print("No playable streams found on this URL:", stream)
-            sys.exit(0)
+    if direct_url:
+        try:
+            process = (
+                ffmpeg.input(stream, loglevel="panic")
+                .output("pipe:", format="s16le", acodec="pcm_s16le", ac=1, ar=SAMPLE_RATE)
+                .run_async(pipe_stdout=True)
+            )
+        except ffmpeg.Error as e:
+            raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
 
-        option = None
-        for quality in [preferred_quality] + ['audio_only', 'best']:
-            if quality in stream_options:
-                option = quality
-                break
-        if option is None:
-            # Fallback
-            option = next(iter(stream_options.values()))
+        return process, None
 
-        stream = stream_options[option].to_url()
+    import streamlink
+    import subprocess
+    import threading
+    stream_options = streamlink.streams(stream)
+    if not stream_options:
+        print("No playable streams found on this URL:", stream)
+        sys.exit(0)
+
+    option = None
+    for quality in [preferred_quality] + ['audio_only', 'best']:
+        if quality in stream_options:
+            option = quality
+            break
+    if option is None:
+        # Fallback
+        option = next(iter(stream_options.values()))
+
+    def writer(streamlink_proc, ffmpeg_proc):
+        while (not streamlink_proc.poll()) and (not ffmpeg_proc.poll()):
+            try:
+                chunk = streamlink_proc.stdout.read(1024)
+                ffmpeg_proc.stdin.write(chunk)
+            except (BrokenPipeError, OSError):
+                pass
+
+    cmd = ['streamlink', stream, option, "-O"]
+    streamlink_process = subprocess.Popen(cmd, stdout=subprocess.PIPE)
 
     try:
-        process = (
-            ffmpeg.input(stream, loglevel="panic")
+        ffmpeg_process = (
+            ffmpeg.input("pipe:", loglevel="panic")
             .output("pipe:", format="s16le", acodec="pcm_s16le", ac=1, ar=SAMPLE_RATE)
-            .run_async(pipe_stdout=True)
+            .run_async(pipe_stdin=True, pipe_stdout=True)
         )
     except ffmpeg.Error as e:
         raise RuntimeError(f"Failed to load audio: {e.stderr.decode()}") from e
 
-    return process
+    thread = threading.Thread(target=writer, args=(streamlink_process, ffmpeg_process))
+    thread.start()
+    return ffmpeg_process, streamlink_process
 
 
 def main(url, model="small", language=None, interval=5, history_buffer_size=0, preferred_quality="audio_only",
@@ -91,12 +115,12 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
     model = whisper.load_model(model)
 
     print("Opening stream...")
-    process = open_stream(url, direct_url, preferred_quality)
+    process1, process2 = open_stream(url, direct_url, preferred_quality)
 
-    while process.poll() is None:
+    while process1.poll() is None:
         try:
             # Read audio from ffmpeg stream
-            in_bytes = process.stdout.read(n_bytes)
+            in_bytes = process1.stdout.read(n_bytes)
             if not in_bytes:
                 break
             audio_buffer.append(np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0)
@@ -132,7 +156,9 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
             print("Error", e)
 
     print("Stream ended")
-    process.wait()
+    process1.wait()
+    if process2:
+        process2.kill()
 
 
 def cli():
