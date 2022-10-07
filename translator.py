@@ -5,8 +5,7 @@ from datetime import datetime
 import ffmpeg
 import numpy as np
 import whisper
-
-SAMPLE_RATE = 16000
+from whisper.audio import SAMPLE_RATE
 
 
 class RingBuffer:
@@ -105,7 +104,7 @@ def open_stream(stream, direct_url, preferred_quality):
 
 
 def main(url, model="small", language=None, interval=5, history_buffer_size=0, preferred_quality="audio_only",
-         direct_url=False, **decode_options):
+         use_vad=True, direct_url=False, **decode_options):
 
     n_bytes = interval * SAMPLE_RATE * 2  # Factor 2 comes from reading the int16 stream as bytes
     audio_buffer = RingBuffer((history_buffer_size // interval) + 1)
@@ -113,23 +112,29 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
 
     print("Loading model...")
     model = whisper.load_model(model)
+    if use_vad:
+        from vad import VAD
+        vad = VAD()
 
+    print("Opening stream...")
+    process1, process2 = open_stream(url, direct_url, preferred_quality)
     try:
-        print("Opening stream...")
-        process1, process2 = open_stream(url, direct_url, preferred_quality)
-
         while process1.poll() is None:
             # Read audio from ffmpeg stream
             in_bytes = process1.stdout.read(n_bytes)
             if not in_bytes:
                 break
-            audio_buffer.append(np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0)
+
+            audio = np.frombuffer(in_bytes, np.int16).flatten().astype(np.float32) / 32768.0
+            if use_vad and vad.no_speech(audio):
+                print(f'{datetime.now().strftime("%H:%M:%S")}')
+                continue
+            audio_buffer.append(audio)
 
             # Decode the audio
             result = model.transcribe(np.concatenate(audio_buffer.get_all()),
                                       prefix="".join(previous_text.get_all()),
                                       language=language,
-                                      compression_ratio_threshold=2.0,
                                       without_timestamps=True,
                                       **decode_options)
 
@@ -186,12 +191,15 @@ def cli():
     parser.add_argument('--preferred_quality', type=str, default='audio_only',
                         help='Preferred stream quality option. "best" and "worst" should always be available. Type '
                              '"streamlink URL" in the console to see quality options for your URL.')
+    parser.add_argument('--disable_vad', action='store_true',
+                        help='Set this flag to disable additional voice activity detection by Silero VAD.')
     parser.add_argument('--direct_url', action='store_true',
                         help='Set this flag to pass the URL directly to ffmpeg. Otherwise, streamlink is used to '
                              'obtain the stream URL.')
 
     args = parser.parse_args().__dict__
     url = args.pop("URL")
+    args["use_vad"] = not args.pop("disable_vad")
 
     if args['model'].endswith('.en'):
         if args['model'] == 'large.en':
