@@ -6,15 +6,20 @@ warnings.filterwarnings("ignore")
 
 class VAD:
     def __init__(self):
-        self.model, _ = torch.hub.load(
-            repo_or_dir="snakers4/silero-vad",
-            model="silero_vad",
-        )
+        self.model = init_jit_model("silero_vad.jit")
 
     def no_speech(self, audio):
         speech = get_speech_timestamps(torch.Tensor(audio), self.model, return_seconds=True)
         # print(speech)
         return len(speech) == 0
+
+
+def init_jit_model(model_path: str,
+                   device=torch.device('cpu')):
+    torch.set_grad_enabled(False)
+    model = torch.jit.load(model_path, map_location=device)
+    model.eval()
+    return model
 
 
 def get_speech_timestamps(audio: torch.Tensor,

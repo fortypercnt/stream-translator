@@ -70,7 +70,7 @@ def open_stream(stream, direct_url, preferred_quality):
         sys.exit(0)
 
     option = None
-    for quality in [preferred_quality] + ['audio_only', 'best']:
+    for quality in [preferred_quality, 'audio_only', 'audio_mp4a', 'audio_opus', 'best']:
         if quality in stream_options:
             option = quality
             break
