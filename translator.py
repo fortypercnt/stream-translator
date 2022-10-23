@@ -1,7 +1,7 @@
 import argparse
 import sys
 from datetime import datetime
-
+import poster
 import ffmpeg
 import numpy as np
 import whisper
@@ -156,7 +156,8 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
                 
             print(f'{datetime.now().strftime("%H:%M:%S")} '
                   f'{"" if language else "(" + result.get("language") + ")"} {result.get("text")}')
-
+            poster.post_qq_guild(
+                f'{datetime.now().strftime("%H:%M:%S")} ', result.get("text"))
         print("Stream ended")
     finally:
         process1.kill()
