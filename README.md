@@ -1,4 +1,9 @@
-# stream-translator
+# colab_whipser_stream_translator
+使用colab云端运行直播实时语音转写  
+具体使用方法请直接看文档 👇   
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1SEhfzUSm07IUjMd5_HrbmXd9cyh0N-wW?usp=sharing)  
+有关发送到QQ频道使用了https://github.com/Mrs4s/go-cqhttp
+## stream-translator
 Command line utility to transcribe or translate audio from livestreams in real time. Uses [streamlink](https://github.com/streamlink/streamlink) to 
 get livestream URLs from various services and OpenAI's [whisper](https://github.com/openai/whisper) for transcription/translation.
 This script is inspired by [audioWhisper](https://github.com/Awexander/audioWhisper) which transcribes/translates desktop audio.
