@@ -169,13 +169,13 @@ def cli():
     parser.add_argument('URL', type=str, help='Stream website and channel name, e.g. twitch.tv/forsen')
     parser.add_argument('--model', type=str,
                         choices=['tiny', 'tiny.en', 'small', 'small.en', 'medium', 'medium.en', 'large'],
-                        default='small',
+                        default='medium',
                         help='Model to be used for generating audio transcription. Smaller models are faster and use '
                              'less VRAM, but are also less accurate. .en models are more accurate but only work on '
                              'English audio.')
-    parser.add_argument('--task', type=str, choices=['transcribe', 'translate'], default='translate',
+    parser.add_argument('--task', type=str, choices=['transcribe', 'translate'], default='transcribe',
                         help='Whether to transcribe the audio (keep original language) or translate to English.')
-    parser.add_argument('--language', type=str, default='auto',
+    parser.add_argument('--language', type=str, default='Japanese',
                         help='Language spoken in the stream. Default option is to auto detect the spoken language. '
                              'See https://github.com/openai/whisper for available languages.')
     parser.add_argument('--interval', type=int, default=5,
@@ -188,7 +188,7 @@ def cli():
                         help='Number of beams in beam search. Set to 0 to use greedy algorithm instead.')
     parser.add_argument('--best_of', type=int, default=5,
                         help='Number of candidates when sampling with non-zero temperature.')
-    parser.add_argument('--preferred_quality', type=str, default='audio_only',
+    parser.add_argument('--preferred_quality', type=str, default='worst',
                         help='Preferred stream quality option. "best" and "worst" should always be available. Type '
                              '"streamlink URL" in the console to see quality options for your URL.')
     parser.add_argument('--disable_vad', action='store_true',
