@@ -44,5 +44,5 @@ See [streamlink plugins](https://streamlink.github.io/plugins.html) for info on 
 ## Using faster-whisper
 
 faster-whisper provides significant performance upgrades over the original OpenAI implementation (~ 4x faster, ~ 2x less memory).
-To use it, follow the instructions [here](https://opennmt.net/CTranslate2/quantization.html) to install faster-whisper and convert your models to CTranslate2 format.
+To use it, follow the instructions [here](https://github.com/guillaumekln/faster-whisper#installation) to install faster-whisper and convert your models to CTranslate2 format.
 Then you can run the CLI with --use_faster_whisper and set --faster_whisper_model_path to the location of your converted model.
