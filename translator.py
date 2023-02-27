@@ -104,24 +104,31 @@ def open_stream(stream, direct_url, preferred_quality):
 
 
 def main(url, model="small", language=None, interval=5, history_buffer_size=0, preferred_quality="audio_only",
-         use_vad=True, direct_url=False, **decode_options):
+         use_vad=True, direct_url=False, faster_whisper_args=None, **decode_options):
 
     n_bytes = interval * SAMPLE_RATE * 2  # Factor 2 comes from reading the int16 stream as bytes
     audio_buffer = RingBuffer((history_buffer_size // interval) + 1)
     previous_text = RingBuffer(history_buffer_size // interval)
 
     print("Loading model...")
-    model = whisper.load_model(model)
+    if faster_whisper_args:
+        from faster_whisper import WhisperModel
+        model = WhisperModel(faster_whisper_args["model_path"],
+                             device=faster_whisper_args["device"], 
+                             compute_type=faster_whisper_args["compute_type"])
+    else:
+        model = whisper.load_model(model)
+        
     if use_vad:
         from vad import VAD
         vad = VAD()
 
     print("Opening stream...")
-    process1, process2 = open_stream(url, direct_url, preferred_quality)
+    ffmpeg_process, streamlink_process = open_stream(url, direct_url, preferred_quality)
     try:
-        while process1.poll() is None:
+        while ffmpeg_process.poll() is None:
             # Read audio from ffmpeg stream
-            in_bytes = process1.stdout.read(n_bytes)
+            in_bytes = ffmpeg_process.stdout.read(n_bytes)
             if not in_bytes:
                 break
 
@@ -132,21 +139,39 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
             audio_buffer.append(audio)
 
             # Decode the audio
-            result = model.transcribe(np.concatenate(audio_buffer.get_all()),
-                                      prefix="".join(previous_text.get_all()),
-                                      language=language,
-                                      without_timestamps=True,
-                                      **decode_options)
-
             clear_buffers = False
-            new_prefix = ""
-            for segment in result["segments"]:
-                if segment["temperature"] < 0.5 and segment["no_speech_prob"] < 0.6:
-                    new_prefix += segment["text"]
-                else:
-                    # Clear history if the translation is unreliable, otherwise prompting on this leads to repetition
-                    # and getting stuck.
-                    clear_buffers = True
+            if faster_whisper_args:
+                segments, info = model.transcribe(audio,
+                                                  language=language,
+                                                  **decode_options)
+                
+                decoded_language = "" if language else "(" + info.language + ")"
+                decoded_text = ""
+                previous_segment = ""
+                for segment in segments:
+                    if segment.text != previous_segment:
+                        decoded_text += segment.text
+                        previous_segment = segment.text
+                        
+                new_prefix = decoded_text
+    
+            else:
+                result = model.transcribe(np.concatenate(audio_buffer.get_all()),
+                                          prefix="".join(previous_text.get_all()),
+                                          language=language,
+                                          without_timestamps=True,
+                                          **decode_options)
+                
+                decoded_language = "" if language else "(" + result.get("language") + ")"
+                decoded_text = result.get("text")
+                new_prefix = ""
+                for segment in result["segments"]:
+                    if segment["temperature"] < 0.5 and segment["no_speech_prob"] < 0.6:
+                        new_prefix += segment["text"]
+                    else:
+                        # Clear history if the translation is unreliable, otherwise prompting on this leads to
+                        # repetition and getting stuck.
+                        clear_buffers = True
 
             previous_text.append(new_prefix)
 
@@ -154,14 +179,13 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
                 audio_buffer.clear()
                 previous_text.clear()
                 
-            print(f'{datetime.now().strftime("%H:%M:%S")} '
-                  f'{"" if language else "(" + result.get("language") + ")"} {result.get("text")}')
+            print(f'{datetime.now().strftime("%H:%M:%S")} {decoded_language} {decoded_text}')
 
         print("Stream ended")
     finally:
-        process1.kill()
-        if process2:
-            process2.kill()
+        ffmpeg_process.kill()
+        if streamlink_process:
+            streamlink_process.kill()
 
 
 def cli():
@@ -196,10 +220,26 @@ def cli():
     parser.add_argument('--direct_url', action='store_true',
                         help='Set this flag to pass the URL directly to ffmpeg. Otherwise, streamlink is used to '
                              'obtain the stream URL.')
+    parser.add_argument('--use_faster_whisper', action='store_true',
+                        help='Set this flag to use faster-whisper implementation instead of the original OpenAI '
+                             'implementation.')
+    parser.add_argument('--faster_whisper_model_path', type=str, default='whisper-large-v2-ct2/',
+                        help='Path to a directory containing a Whisper model in the CTranslate2 format.')
+    parser.add_argument('--faster_whisper_device', type=str, choices=['cuda', 'cpu', 'auto'], default='cuda',
+                        help='Set the device to run faster-whisper on.')
+    parser.add_argument('--faster_whisper_compute_type', type=str, choices=['int8', 'int8_float16', 'int16', 'float16'],
+                        default='float16',
+                        help='Set the quantization type for faster-whisper. See '
+                             'https://opennmt.net/CTranslate2/quantization.html for more info.')
 
     args = parser.parse_args().__dict__
     url = args.pop("URL")
     args["use_vad"] = not args.pop("disable_vad")
+    use_faster_whisper = args.pop("use_faster_whisper")
+    faster_whisper_args = dict()
+    faster_whisper_args["model_path"] = args.pop("faster_whisper_model_path")
+    faster_whisper_args["device"] = args.pop("faster_whisper_device")
+    faster_whisper_args["compute_type"] = args.pop("faster_whisper_compute_type")
 
     if args['model'].endswith('.en'):
         if args['model'] == 'large.en':
@@ -219,7 +259,7 @@ def cli():
     if args['beam_size'] == 0:
         args['beam_size'] = None
 
-    main(url, **args)
+    main(url, faster_whisper_args=faster_whisper_args if use_faster_whisper else None, **args)
 
 
 if __name__ == '__main__':
