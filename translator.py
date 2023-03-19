@@ -1,5 +1,6 @@
 import argparse
 import sys
+import signal
 from datetime import datetime
 
 import ffmpeg
@@ -125,6 +126,15 @@ def main(url, model="small", language=None, interval=5, history_buffer_size=0, p
 
     print("Opening stream...")
     ffmpeg_process, streamlink_process = open_stream(url, direct_url, preferred_quality)
+    
+    def handler(signum, frame):
+        ffmpeg_process.kill()
+        if streamlink_process:
+            streamlink_process.kill()
+        sys.exit(0)
+        
+    signal.signal(signal.SIGINT, handler)
+    
     try:
         while ffmpeg_process.poll() is None:
             # Read audio from ffmpeg stream
